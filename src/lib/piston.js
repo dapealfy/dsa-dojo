@@ -21,21 +21,55 @@ function isNodeRuntime() {
  * Execute source code. Local-first (Node), browser-aware.
  * @returns {Promise<{stdout, stderr, runtime, exitCode, error?, backend}>}
  */
-export async function executeCode(langKey, source, stdin = '') {
+export async function executeCode(langKey, source, stdin = '', problem = null) {
   const cfg = LANG_MAP[langKey]
   if (!cfg) throw new Error(`Unknown language: ${langKey}`)
 
-  // Browser / Vercel: code execution requires the local dev server.
+  // Browser / Vercel: try in-browser execution via Pyodide / sandboxed JS Worker.
+  // No backend, no rate limits, works on Vercel for free. See browser-exec.js.
   if (!isNodeRuntime()) {
+    const { runJsInBrowser, runPythonInBrowser, buildBrowserDriver, isBrowserExecAvailable } = await import('./browser-exec.js')
+    if (isBrowserExecAvailable(langKey) && problem) {
+      // Status callback is wired in by the caller via window.__algodeckExecStatus
+      const onStatus = typeof window !== 'undefined' ? window.__algodeckExecStatus : null
+      const driver = buildBrowserDriver(langKey, problem, source)
+      const t0 = performance.now()
+      const res = langKey === 'python'
+        ? await runPythonInBrowser(driver, stdin, onStatus)
+        : await runJsInBrowser(driver, stdin)
+      const runtime = Math.round(performance.now() - t0)
+      return {
+        stdout: res.stdout,
+        stderr: res.stderr || '',
+        runtime,
+        exitCode: res.exitCode,
+        backend: `browser-${langKey}`,
+      }
+    }
+    if (isBrowserExecAvailable(langKey) && !problem) {
+      // No problem context — fall back to raw execution (user supplied full driver)
+      const onStatus = typeof window !== 'undefined' ? window.__algodeckExecStatus : null
+      const t0 = performance.now()
+      const res = langKey === 'python'
+        ? await runPythonInBrowser(source, stdin, onStatus)
+        : await runJsInBrowser(source, stdin)
+      return {
+        stdout: res.stdout,
+        stderr: res.stderr || '',
+        runtime: Math.round(performance.now() - t0),
+        exitCode: res.exitCode,
+        backend: `browser-${langKey}`,
+      }
+    }
+    // C++ / Java / Go not available in-browser. Local dev handles them.
     return {
       stdout: '',
-      stderr: `⚠️ Code execution is only available on the local dev server.\n\n` +
-              `This web build is for browsing problems, viewing solutions (3-click reveal), and tracking your progress. ` +
-              `To actually run code, clone the repo and run \`npm install && npm run dev\` locally.\n\n` +
-              `(${cfg.label} test was not executed.)`,
+      stderr: `⚠️ ${cfg.label} execution is not available in the web build.\n\n` +
+              `Supported in browser: JavaScript, Python (runs locally in your browser via WebAssembly).\n` +
+              `For ${cfg.label}, clone the repo and run 'npm run dev' locally.`,
       runtime: null,
       exitCode: -1,
-      backend: 'web-disabled',
+      backend: 'web-unsupported',
     }
   }
 
@@ -230,7 +264,7 @@ export async function runTestCases(langKey, problem, userCode) {
   const results = []
   for (const tc of problem.testCases) {
     const stdin = JSON.stringify(Object.values(tc.input))
-    const res = await executeCode(langKey, driver, stdin)
+    const res = await executeCode(langKey, driver, stdin, problem)
     let passed = false
     try {
       const actual = JSON.parse((res.stdout || '').trim())

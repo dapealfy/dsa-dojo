@@ -6,11 +6,17 @@ export default function TestRunner({ problem, language, code }) {
   const [running, setRunning] = useState(false)
   const [results, setResults] = useState([])
   const [error, setError] = useState(null)
+  const [statusMsg, setStatusMsg] = useState(null)
 
   const run = async () => {
     setRunning(true)
     setError(null)
     setResults([])
+    setStatusMsg(null)
+    // Wire up the exec status callback (read by browser-exec.js Pyodide loader)
+    if (typeof window !== 'undefined') {
+      window.__algodeckExecStatus = (msg) => setStatusMsg(msg)
+    }
     try {
       const out = await runTestCases(language, problem, code)
       setResults(out)
@@ -18,6 +24,10 @@ export default function TestRunner({ problem, language, code }) {
       setError(e.message)
     } finally {
       setRunning(false)
+      setStatusMsg(null)
+      if (typeof window !== 'undefined') {
+        delete window.__algodeckExecStatus
+      }
     }
   }
 
@@ -36,7 +46,7 @@ export default function TestRunner({ problem, language, code }) {
           {running ? (
             <>
               <span className="animate-spin inline-block w-4 h-4 border-2 border-bg border-t-transparent rounded-full" />
-              Running...
+              {statusMsg || 'Running...'}
             </>
           ) : (
             <>▶ Run tests ({problem.testCases.length})</>
