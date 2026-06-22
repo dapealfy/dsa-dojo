@@ -36,10 +36,15 @@ export async function executeCode(langKey, source, stdin = '', problem = null) {
       let testArgs = []
       try { testArgs = JSON.parse(stdin || '[]') } catch { testArgs = [] }
       const driver = buildBrowserDriver(langKey, problem, source, testArgs)
+      // Debug: expose last driver for inspection via window.__algodeckLastDriver
+      if (typeof window !== 'undefined') {
+        window.__algodeckLastDriver = driver
+        window.__algodeckLastTestArgs = testArgs
+      }
       const t0 = performance.now()
       const res = langKey === 'python'
-        ? await runPythonInBrowser(driver, '', onStatus)
-        : await runJsInBrowser(driver, '')
+        ? await runPythonInBrowser(driver, onStatus)
+        : await runJsInBrowser(driver)
       const runtime = Math.round(performance.now() - t0)
       return {
         stdout: res.stdout,
@@ -54,8 +59,8 @@ export async function executeCode(langKey, source, stdin = '', problem = null) {
       const onStatus = typeof window !== 'undefined' ? window.__algodeckExecStatus : null
       const t0 = performance.now()
       const res = langKey === 'python'
-        ? await runPythonInBrowser(source, stdin, onStatus)
-        : await runJsInBrowser(source, stdin)
+        ? await runPythonInBrowser(source, onStatus)
+        : await runJsInBrowser(source)
       return {
         stdout: res.stdout,
         stderr: res.stderr || '',

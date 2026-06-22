@@ -37,19 +37,15 @@ export function loadPyodide(onStatus) {
 }
 
 /**
- * Run Python code in Pyodide. `code` is the FULL driver (user function + test wrapper).
- * Returns { stdout, stderr } mirroring the Node exec shape.
+ * Run Python code in Pyodide. The driver is expected to be self-contained —
+ * test args are inlined as a JSON literal by buildBrowserDriver, so there's
+ * no need to fiddle with sys.stdin. We just set stdout/stderr capture and run.
  */
-export async function runPythonInBrowser(code, stdin = '', onStatus) {
+export async function runPythonInBrowser(code, onStatus) {
   const py = await loadPyodide(onStatus)
   let stdout = '', stderr = ''
   py.setStdout({ batched: (s) => { stdout += s + '\n' } })
   py.setStderr({ batched: (s) => { stderr += s + '\n' } })
-  // Provide stdin via a StringIO shim so `sys.stdin.read()` works the same as Node
-  py.runPython(`
-import sys, io
-sys.stdin = io.StringIO(${JSON.stringify(stdin)})
-`)
   try {
     await py.runPythonAsync(code)
   } catch (e) {
@@ -66,22 +62,19 @@ sys.stdin = io.StringIO(${JSON.stringify(stdin)})
 
 const JS_WORKER_SRC = `
 self.onmessage = async (e) => {
-  const { code, stdin } = e.data
+  const { code } = e.data
   let stdout = '', stderr = '', exitCode = 0
   const log = (...args) => stdout += args.map(a => typeof a === 'string' ? a : JSON.stringify(a)).join(' ') + '\\n'
   const origConsole = { log: console.log, error: console.error, warn: console.warn }
   console.log = log; console.error = (...a) => stderr += a.map(x => typeof x === 'string' ? x : JSON.stringify(x)).join(' ') + '\\n'
   console.warn = log
-  // Replace require('fs').readFileSync(0, ...) and process.stdin.read() patterns with our stdin
-  const fs = { readFileSync: (fd, enc) => { if (fd === 0) return stdin; throw new Error('fs not available in browser sandbox') } }
-  const process = { stdin: { read: () => stdin }, stdout: { write: s => stdout += s }, stderr: { write: s => stderr += s }, exit: c => { exitCode = c; throw new Error('exit') } }
   try {
     // Wrap user code so top-level return works (driver uses it)
-    const wrapped = new Function('require', 'process', 'fs', 'console', code + '\\n;return typeof _result !== "undefined" ? _result : undefined;')
-    const result = wrapped(require, process, fs, console)
+    const wrapped = new Function('console', code + '\\n;return typeof _result !== "undefined" ? _result : undefined;')
+    const result = wrapped(console)
     if (result !== undefined) stdout += JSON.stringify(result)
   } catch (e) {
-    if (e.message !== 'exit') stderr += (stderr ? '\\n' : '') + (e.message || String(e))
+    stderr += (stderr ? '\\n' : '') + (e.message || String(e))
   }
   console.log = origConsole.log; console.error = origConsole.error; console.warn = origConsole.warn
   self.postMessage({ stdout: stdout.trim(), stderr: stderr.trim(), exitCode })
@@ -100,7 +93,7 @@ function getJsWorkerURL() {
  * Run JS in a sandboxed Web Worker with a timeout kill switch.
  * Same shape as runPythonInBrowser: { stdout, stderr, exitCode }.
  */
-export function runJsInBrowser(code, stdin = '', timeoutMs = 5000) {
+export function runJsInBrowser(code, timeoutMs = 5000) {
   return new Promise((resolve) => {
     if (typeof window === 'undefined') {
       resolve({ stdout: '', stderr: 'JS execution only available in browser', exitCode: -1 })
@@ -128,7 +121,7 @@ export function runJsInBrowser(code, stdin = '', timeoutMs = 5000) {
       worker.terminate()
       resolve({ stdout: '', stderr: e.message || 'worker error', exitCode: 1 })
     }
-    worker.postMessage({ code, stdin })
+    worker.postMessage({ code })
   })
 }
 
