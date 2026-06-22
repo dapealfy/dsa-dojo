@@ -32,11 +32,14 @@ export async function executeCode(langKey, source, stdin = '', problem = null) {
     if (isBrowserExecAvailable(langKey) && problem) {
       // Status callback is wired in by the caller via window.__algodeckExecStatus
       const onStatus = typeof window !== 'undefined' ? window.__algodeckExecStatus : null
-      const driver = buildBrowserDriver(langKey, problem, source)
+      // Parse the JSON-encoded test args (same format as Node stdin path)
+      let testArgs = []
+      try { testArgs = JSON.parse(stdin || '[]') } catch { testArgs = [] }
+      const driver = buildBrowserDriver(langKey, problem, source, testArgs)
       const t0 = performance.now()
       const res = langKey === 'python'
-        ? await runPythonInBrowser(driver, stdin, onStatus)
-        : await runJsInBrowser(driver, stdin)
+        ? await runPythonInBrowser(driver, '', onStatus)
+        : await runJsInBrowser(driver, '')
       const runtime = Math.round(performance.now() - t0)
       return {
         stdout: res.stdout,
@@ -180,13 +183,11 @@ async function runLocalCpp(source, stdin, { spawn, execFileAsync, writeFile, unl
 
 // ──────── Test driver generation (browser-safe) ────────
 
-function camelToSnake(s) {
-  return s.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '')
-}
-
 export function buildDriver(langKey, problem, userCode) {
+  // The function name is the same in every language — LeetCode uses camelCase
+  // universally (twoSum, climbStairs, ...). Users write `def twoSum(...)` in
+  // Python or `function twoSum(...)` in JS — we just call whatever they wrote.
   const fn = problem.functionName || 'solution'
-  const pyFn = camelToSnake(fn)
 
   switch (langKey) {
     case 'javascript':
@@ -199,7 +200,7 @@ process.stdout.write(JSON.stringify(_result));`
       return `${userCode}
 import sys, json
 _args = json.loads(sys.stdin.read().strip())
-_result = ${pyFn}(*_args)
+_result = ${fn}(*_args)
 sys.stdout.write(json.dumps(_result))`
 
     case 'go':

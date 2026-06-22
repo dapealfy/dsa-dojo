@@ -134,28 +134,39 @@ export function runJsInBrowser(code, stdin = '', timeoutMs = 5000) {
 
 /**
  * Build a browser-friendly version of the test driver.
- * Mirrors the Node drivers in piston.js but uses globals (no require/process).
+ * Mirrors the Node drivers in piston.js but inlines the test args directly
+ * as a literal — no sys.stdin / _stdin handoff needed (Pyodide namespace
+ * quirks make that unreliable, and the JS worker never had a _stdin binding).
+ * @param {Array} testArgs  positional args for the user's function
  */
-export function buildBrowserDriver(langKey, problem, userCode) {
+export function buildBrowserDriver(langKey, problem, userCode, testArgs = []) {
+  // The function name is camelCase (LeetCode convention) and identical in every
+  // language. Users write `def twoSum(...)` in Python or `function twoSum(...)`
+  // in JS — we just call whatever they wrote.
   const fn = problem.functionName || 'solution'
-  const pyFn = fn.replace(/([A-Z])/g, '_$1').toLowerCase().replace(/^_/, '')
+  // Double-encode: outer JSON.stringify makes it a valid Python/JS literal
+  // when interpolated. For Python, json.loads of that string yields the array.
+  const argsLiteral = JSON.stringify(testArgs)
 
   switch (langKey) {
     case 'javascript':
       return `${userCode}
-const _args = JSON.parse(_stdin.trim());
-let _result;
-try { _result = ${fn}(..._args); } catch (e) { throw e; }
+try {
+  const _args = ${argsLiteral};
+  const _result = ${fn}(..._args);
+  console.log(JSON.stringify(_result));
+} catch (e) {
+  console.error(e.message || String(e));
+  throw e;
+}
 `
-
     case 'python':
       return `${userCode}
-import sys, json
-_args = json.loads(sys.stdin.read().strip())
-_result = ${pyFn}(*_args)
+import json
+_args = json.loads(${JSON.stringify(argsLiteral)})
+_result = ${fn}(*_args)
 print(json.dumps(_result))
 `
-
     default:
       return userCode
   }
